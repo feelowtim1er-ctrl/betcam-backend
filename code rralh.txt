@@ -1,0 +1,137 @@
+const express = require('express');
+const axios = require('axios');
+const mysql = require('mysql2');
+const app = express();
+
+app.use(express.json());
+
+// 🔗 DB
+const db = mysql.createConnection({
+    host: 'localhost',
+    user: 'root',
+    password: '',
+    database: 'paris_app'
+});
+
+db.connect();
+
+// =====================
+// 💳 DEPOT (Flutterwave)
+// =====================
+app.post('/depot', async (req, res) => {
+    const { montant, phone, user_id } = req.body;
+
+    try {
+        const response = await axios.post(
+            "https://api.flutterwave.com/v3/charges?type=mobile_money_franco",
+            {
+                tx_ref: "TX-" + Date.now(),
+                amount: montant,
+                currency: "XAF",
+                phone_number: phone,
+                email: "client@email.com",
+                fullname: "Client",
+                redirect_url: "http://localhost:3000/verify"
+            },
+            {
+                headers: {
+                    Authorization: "Bearer TA_CLE_FLUTTERWAVE"
+                }
+            }
+        );
+
+        res.send(response.data);
+
+    } catch (err) {
+        res.send(err.message);
+    }
+});
+
+
+// =====================
+// ✅ VERIFICATION PAIEMENT
+// =====================
+app.get('/verify', async (req, res) => {
+
+    const tx_id = req.query.transaction_id;
+
+    const response = await axios.get(
+        `https://api.flutterwave.com/v3/transactions/${tx_id}/verify`,
+        {
+            headers: {
+                Authorization: "Bearer TA_CLE_FLUTTERWAVE"
+            }
+        }
+    );
+
+    if (response.data.data.status === "successful") {
+
+        const montant = response.data.data.amount;
+        const user_id = 1; // à adapter
+
+        db.query(
+            "UPDATE users SET solde = solde + ? WHERE id=?",
+            [montant, user_id]
+        );
+
+        res.send("Paiement confirmé !");
+    } else {
+        res.send("Echec paiement");
+    }
+});
+
+
+// =====================
+// 💸 RETRAIT
+// =====================
+app.post('/retrait', async (req, res) => {
+    const { montant, phone, user_id } = req.body;
+
+    // vérifier solde
+    db.query("SELECT solde FROM users WHERE id=?", [user_id], async (err, result) => {
+
+        if (result[0].solde < montant) {
+            return res.send("Solde insuffisant");
+        }
+
+        // retirer argent
+        db.query("UPDATE users SET solde = solde - ? WHERE id=?", [montant, user_id]);
+
+        try {
+            const response = await axios.post(
+                "https://api.flutterwave.com/v3/transfers",
+                {
+                    account_bank: "MPS", // Mobile Money
+                    account_number: phone,
+                    amount: montant,
+                    currency: "XAF",
+                    narration: "Retrait utilisateur"
+                },
+                {
+                    headers: {
+                        Authorization: "Bearer TA_CLE_FLUTTERWAVE"
+                    }
+                }
+            );
+
+            res.send("Retrait envoyé !");
+        } catch (err) {
+            res.send(err.message);
+        }
+    });
+});
+
+
+// =====================
+// 🔔 NOTIFICATION SIMPLE
+// =====================
+app.post('/notify', (req, res) => {
+    console.log("Notification :", req.body.message);
+    res.send("Envoyé");
+});
+
+
+// =====================
+app.listen(3000, () => {
+    console.log("🚀 Serveur lancé sur port 3000");
+});
