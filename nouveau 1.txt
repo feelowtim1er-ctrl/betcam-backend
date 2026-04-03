@@ -1,0 +1,131 @@
+const express = require('express');
+const mysql = require('mysql2');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const helmet = require('helmet');
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+app.use(helmet());
+
+// 🔌 CONFIG DB (Render utilisera variables)
+const db = mysql.createConnection({
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASS || "",
+  database: process.env.DB_NAME || "betcam"
+});
+
+// TEST
+app.get('/', (req, res) => {
+  res.send("🚀 BET CAM BACKEND ACTIF");
+});
+
+// 🔐 REGISTER
+app.post('/register', async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || password.length < 6)
+    return res.send("Erreur");
+
+  const hash = await bcrypt.hash(password, 10);
+
+  db.query(
+    "INSERT INTO users (username, password) VALUES (?,?)",
+    [username, hash],
+    () => res.send("Compte créé")
+  );
+});
+
+// 🔑 LOGIN
+app.post('/login', (req, res) => {
+  const { username, password } = req.body;
+
+  db.query("SELECT * FROM users WHERE username=?", [username], async (err, result) => {
+    if (result.length === 0) return res.send("Erreur");
+
+    const valid = await bcrypt.compare(password, result[0].password);
+    if (!valid) return res.send("Erreur");
+
+    const token = jwt.sign({ id: result[0].id }, "SECRET", { expiresIn: "1h" });
+
+    res.send({ token, user_id: result[0].id });
+  });
+});
+
+// 💰 DEPOT
+app.post('/depot', (req, res) => {
+  const { user_id, montant } = req.body;
+
+  db.query(
+    "INSERT INTO transactions (user_id,type,montant,statut) VALUES (?, 'depot', ?, 'attente')",
+    [user_id, montant]
+  );
+
+  res.send("Dépot en attente - Envoyer à 682251773");
+});
+
+// ✅ VALIDATION ADMIN
+app.post('/valider-depot', (req, res) => {
+  const { user_id, montant } = req.body;
+
+  db.query("UPDATE users SET solde = solde + ? WHERE id=?", [montant, user_id]);
+  db.query("UPDATE transactions SET statut='ok' WHERE user_id=?", [user_id]);
+
+  res.send("Dépot validé");
+});
+
+// 💸 RETRAIT
+app.post('/retrait', (req, res) => {
+  const { user_id, montant } = req.body;
+
+  db.query("SELECT solde FROM users WHERE id=?", [user_id], (err, result) => {
+    if (result[0].solde < montant)
+      return res.send("Solde insuffisant");
+
+    db.query("UPDATE users SET solde = solde - ? WHERE id=?", [montant, user_id]);
+
+    res.send("Retrait effectué");
+  });
+});
+
+// 🎰 SLOT
+app.get('/slot', (req, res) => {
+  let symbols = ["🍒","🍋","⭐","7️⃣"];
+
+  let r1 = symbols[Math.floor(Math.random()*4)];
+  let r2 = symbols[Math.floor(Math.random()*4)];
+  let r3 = symbols[Math.floor(Math.random()*4)];
+
+  let gain = (r1 === r2 && r2 === r3) ? 1000 : 0;
+
+  res.send({ r1, r2, r3, gain });
+});
+
+// 🎡 ROULETTE
+app.get('/roulette', (req, res) => {
+  let num = Math.floor(Math.random()*37);
+  let color = num % 2 === 0 ? "noir" : "rouge";
+
+  res.send({ num, color });
+});
+
+// 💥 CRASH
+app.get('/crash', (req, res) => {
+  let multiplier = (Math.random()*10).toFixed(2);
+  res.send({ multiplier });
+});
+
+// 🎯 MATH GAME
+app.get('/math', (req, res) => {
+  let a = Math.floor(Math.random()*10);
+  let b = Math.floor(Math.random()*10);
+
+  res.send({ question: `${a}+${b}`, reponse: a+b });
+});
+
+// PORT RENDER
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("🚀 Serveur lancé sur port " + PORT));
